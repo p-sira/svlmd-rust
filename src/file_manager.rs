@@ -62,7 +62,11 @@ impl LogseqPage {
         writeln!(file).unwrap();
 
         self.contents.iter().for_each(|(content, indentation)| {
-            writeln!(file, "{}- {}", "    ".repeat(*indentation as usize), content).unwrap();
+            if content.is_empty() {
+                writeln!(file).unwrap();
+            } else {
+                writeln!(file, "{}- {}", "    ".repeat(*indentation as usize), content).unwrap();                
+            }
         });
 
         Ok(())
