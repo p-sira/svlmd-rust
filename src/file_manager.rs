@@ -4,15 +4,15 @@
 pub struct ConfigNotFoundError;
 
 use anyhow::{Context, Result};
+use git2::{Repository, StatusOptions};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
-use git2::{Repository, StatusOptions};
 
 /// Represents a Logseq page with its metadata and content
-/// 
+///
 /// A Logseq page consists of:
 /// - A title
 /// - Properties (key-value pairs in the page header)
@@ -41,23 +41,24 @@ impl LogseqPage {
     }
 
     /// Create a Logseq page from plain text content
-    /// 
+    ///
     /// Converts plain text content into a structured page by:
     /// - Parsing indentation levels
     /// - Removing bullet points
     /// - Preserving properties
-    pub fn from_plain(
-        title: &str,
-        properties: Vec<(String, String)>,
-        contents: &str,
-    ) -> Self {
+    pub fn from_plain(title: &str, properties: Vec<(String, String)>, contents: &str) -> Self {
         fn count_indentation(line: &str) -> u8 {
             let spaces = line.chars().take_while(|c| *c == ' ').count() as u8;
             spaces / 4
         }
         let contents = contents
             .lines()
-            .map(|line| (line.trim().replacen("- ", "", 1).to_string(), count_indentation(line)))
+            .map(|line| {
+                (
+                    line.trim().replacen("- ", "", 1).to_string(),
+                    count_indentation(line),
+                )
+            })
             .collect::<Vec<(String, u8)>>();
         Self {
             title: title.to_string(),
@@ -67,12 +68,12 @@ impl LogseqPage {
     }
 
     /// Write the page to the filesystem
-    /// 
+    ///
     /// Formats and writes the page with:
     /// - Properties in the header
     /// - Properly indented content
     /// - Bullet points for each line
-    pub fn write_page(&self, pages_dir: &PathBuf) -> Result<()> {
+    pub fn write_page(&self, pages_dir: &Path) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -88,7 +89,13 @@ impl LogseqPage {
             if content.is_empty() {
                 writeln!(file).unwrap();
             } else {
-                writeln!(file, "{}- {}", "    ".repeat(*indentation as usize), content).unwrap();                
+                writeln!(
+                    file,
+                    "{}- {}",
+                    "    ".repeat(*indentation as usize),
+                    content
+                )
+                .unwrap();
             }
         });
 
@@ -96,19 +103,20 @@ impl LogseqPage {
     }
 
     /// Read a page from the filesystem
-    /// 
+    ///
     /// Parses a Logseq page file into a structured format by:
     /// - Extracting properties from the header
     /// - Preserving content with indentation
-    pub fn read_page(&self, pages_dir: &PathBuf) -> Result<Self> {
+    pub fn read_page(&self, pages_dir: &Path) -> Result<Self> {
         let file = File::open(self.title_to_path(pages_dir))?;
         let reader = BufReader::new(file);
         let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
-        
-        let properties_end = lines.iter()
+
+        let properties_end = lines
+            .iter()
             .position(|line| !line.contains("::"))
             .unwrap_or(0);
-            
+
         let properties = lines[..properties_end]
             .iter()
             .map(|line| {
@@ -116,22 +124,18 @@ impl LogseqPage {
                 (parts[0].to_string(), parts[1].trim().to_string())
             })
             .collect();
-            
+
         let contents = lines[properties_end..].join("\n");
 
-        Ok(Self::from_plain(
-            &self.title,
-            properties,
-            &contents,
-        ))
+        Ok(Self::from_plain(&self.title, properties, &contents))
     }
 
     /// Convert a page title to its filesystem path
-    /// 
+    ///
     /// Handles special characters in titles by:
     /// - Replacing forward slashes with triple underscores
     /// - Adding the .md extension
-    fn title_to_path(&self, pages_dir: &PathBuf) -> PathBuf {
+    fn title_to_path(&self, pages_dir: &Path) -> PathBuf {
         pages_dir.join(self.title.replace("/", "___") + ".md")
     }
 }
@@ -147,7 +151,7 @@ pub struct FileManager {
 
 impl FileManager {
     /// Create a new FileManager instance
-    /// 
+    ///
     /// Initializes by:
     /// - Finding the project root
     /// - Reading configuration
@@ -190,28 +194,27 @@ impl FileManager {
         let page = LogseqPage::new(title, vec![], vec![]);
         page.read_page(&self.root.join("pages"))
     }
-    
+
     /// Get lists of changed pages from Git status
-    /// 
+    ///
     /// Returns an array of three vectors containing:
     /// - [0]: New pages
     /// - [1]: Modified pages
     /// - [2]: Deleted pages
     pub fn get_changed_pages(&self) -> Result<[Vec<String>; 3]> {
-        let repo = Repository::open(&self.root)
-            .context("Failed to open git repository")?;
-        let mut changed_pages = [Vec::new(), Vec::new(), Vec::new()];
-        
+        let repo = Repository::open(&self.root).context("Failed to open git repository")?;
+
         let mut status_opts = StatusOptions::new();
         status_opts
             .include_untracked(true)
             .include_ignored(false)
             .include_unmodified(false)
-            .show(git2::StatusShow::IndexAndWorkdir);
-            
-        let statuses = repo.statuses(Some(&mut status_opts))
+            .show(git2::StatusShow::Index);
+
+        let statuses = repo
+            .statuses(Some(&mut status_opts))
             .context("Failed to get git status")?;
-            
+
         // Sort pages into new, modified, and deleted
         let mut new_pages = Vec::new();
         let mut modified_pages = Vec::new();
@@ -221,24 +224,28 @@ impl FileManager {
             let status = entry.status();
             if let Some(path) = entry.path() {
                 if path.starts_with("pages/") && path.ends_with(".md") {
-                    if let Some(filename) = PathBuf::from(path).file_stem() {
-                        let page_name = filename.to_string_lossy().replace("___", "/");
-                        if status.is_wt_new() {
-                            new_pages.push(page_name);
-                        } else if status.is_wt_modified() || status.is_wt_renamed() {
-                            modified_pages.push(page_name); 
-                        } else if status.is_wt_deleted() {
-                            deleted_pages.push(page_name);
-                        }
+                    let filename = path
+                        .strip_prefix("pages/")
+                        .unwrap()
+                        .strip_suffix(".md")
+                        .unwrap();
+                    let page_name = filename.replace("___", "/");
+                    if status.is_wt_new() || status.is_index_new() {
+                        new_pages.push(page_name);
+                    } else if status.is_wt_modified()
+                        || status.is_wt_renamed()
+                        || status.is_index_modified()
+                        || status.is_index_renamed()
+                    {
+                        modified_pages.push(page_name);
+                    } else if status.is_wt_deleted() || status.is_index_deleted() {
+                        deleted_pages.push(page_name);
                     }
                 }
             }
         }
 
-        changed_pages[0].extend(new_pages);
-        changed_pages[1].extend(modified_pages);
-        changed_pages[2].extend(deleted_pages);
-        Ok(changed_pages)
+        Ok([new_pages, modified_pages, deleted_pages])
     }
 }
 
@@ -248,7 +255,7 @@ pub fn get_executable_path() -> Result<PathBuf> {
 }
 
 /// Detects the root directory of the project
-/// 
+///
 /// Searches for the .svlmd configuration file to determine
 /// the root directory of the SVLMD project
 pub fn detect_root() -> Result<PathBuf> {

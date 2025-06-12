@@ -9,8 +9,7 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use dialoguer::Input;
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
-use std::time::SystemTime;
+use std::path::Path;
 
 use crate::file_manager::{FileManager, LogseqPage};
 
@@ -42,7 +41,7 @@ enum Commands {
 /// 
 /// Creates or overwrites the .svlmd configuration file with contributor information.
 /// Prompts the user for their name and stores it in the configuration.
-fn init_config(root: &PathBuf) -> Result<()> {
+fn init_config(root: &Path) -> Result<()> {
     if root.join(".svlmd").exists() {
         println!(".svlmd already exists. Overwriting...");
     }
@@ -75,7 +74,7 @@ fn init_config(root: &PathBuf) -> Result<()> {
 /// 1. Creating configuration if it doesn't exist
 /// 2. Initializing the file manager
 /// 3. Creating contributor's Logseq page if it doesn't exist
-fn init(root: &PathBuf) -> Result<FileManager> {
+fn init(root: &Path) -> Result<FileManager> {
     // Initialize the tool if not already initialized
     if !root.join(".svlmd").exists() {
         println!("Config not found. Creating...");
@@ -112,7 +111,7 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
         bail!("version.txt not found");
     }
 
-    let version = semver::Version::parse(&fs::read_to_string(version_path)?.lines().next().unwrap())
+    let version = semver::Version::parse(fs::read_to_string(version_path)?.lines().next().unwrap())
         .context("Failed to parse version")?;
 
     if verbose {
@@ -153,40 +152,133 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
     }
 
     let mut page = file_manager.read_logseq_page(&version_page)?;
-    let full_version_string = format!("## {}", version);
-    if !page
-        .contents
+    let full_version_string = format!("## [[{}]]", version);
+    
+    // Find the "Changed Pages" section
+    let changed_pages_index = page.contents
         .iter()
-        .any(|(line, _)| line == &full_version_string)
-    {
-        page.contents.push((full_version_string, 1));
+        .position(|(line, _)| line == "# Changed Pages")
+        .unwrap_or(0);
+
+    // Find the latest version entry after "Changed Pages"
+    let latest_version_index = page.contents[changed_pages_index..]
+        .iter()
+        .position(|(line, indent)| line.starts_with("## [[") && *indent == 1)
+        .map(|pos| pos + changed_pages_index);
+
+    let mut new_entries = vec![(full_version_string.clone(), 1)];
+    let mut existing_changes = Vec::new();
+
+    if let Some(idx) = latest_version_index {
+        let next_version_index = page.contents[idx + 1..]
+            .iter()
+            .position(|(line, indent)| line.starts_with("## [[") && *indent == 1)
+            .map(|pos| pos + idx + 1)
+            .unwrap_or(page.contents.len());
+
+        // Check if the latest version matches current version
+        if page.contents[idx].0 == full_version_string {
+            // Accumulate changes from the existing version
+            for (line, indent) in &page.contents[idx..next_version_index] {
+                if line.starts_with("### ") || line.starts_with("[[") {
+                    existing_changes.push((line.clone(), *indent));
+                }
+            }
+            // Remove existing version entry as we'll merge it with new changes
+            page.contents.drain(idx..next_version_index);
+        }
     }
 
-    // Add changed pages to the subversion
+    // Merge existing changes with new changes
+    let mut all_changes = Vec::new();
+    
+    // Process new changes
     if !changed_pages.iter().all(|v| v.is_empty()) {
         // Added files
-        if !changed_pages[0].is_empty() {
-            page.contents.push(("### Added".to_string(), 2));
-            for added in &changed_pages[0] {
-                page.contents.push((format!("[[{}]]", added), 3));
-            }
+        let mut added = existing_changes.iter()
+            .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
+            .filter(|(line, _)| {
+                let section_start = existing_changes.iter()
+                    .position(|(l, i)| *i == 2 && l == "### Added");
+                let section_end = existing_changes.iter()
+                    .position(|(l, i)| *i == 2 && l == "### Modified")
+                    .or_else(|| existing_changes.iter().position(|(l, i)| *i == 2 && l == "### Deleted"));
+                section_start.and_then(|start| section_end.map(|end| (start, end)))
+                    .map_or(false, |(start, end)| 
+                        existing_changes[start..end].iter().any(|(l, _)| l == line)
+                    )
+            })
+            .map(|(line, _)| line.clone())
+            .collect::<Vec<_>>();
+        
+        added.extend(changed_pages[0].iter().map(|p| format!("[[{}]]", p)));
+        added.sort();
+        added.dedup();
+        
+        if !added.is_empty() {
+            all_changes.push(("### Added".to_string(), 2));
+            all_changes.extend(added.into_iter().map(|page| (page, 3)));
         }
 
         // Modified files
-        if !changed_pages[1].is_empty() {
-            page.contents.push(("### Modified".to_string(), 2));
-            for modified in &changed_pages[1] {
-                page.contents.push((format!("[[{}]]", modified), 3));
-            }
+        let mut modified = existing_changes.iter()
+            .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
+            .filter(|(line, _)| {
+                let section_start = existing_changes.iter()
+                    .position(|(l, i)| *i == 2 && l == "### Modified");
+                let section_end = existing_changes.iter()
+                    .position(|(l, i)| *i == 2 && l == "### Deleted")
+                    .or_else(|| existing_changes.iter().position(|(_, i)| *i == 1));
+                section_start.and_then(|start| section_end.map(|end| (start, end)))
+                    .map_or(false, |(start, end)| 
+                        existing_changes[start..end].iter().any(|(l, _)| l == line)
+                    )
+            })
+            .map(|(line, _)| line.clone())
+            .collect::<Vec<_>>();
+            
+        modified.extend(changed_pages[1].iter().map(|p| format!("[[{}]]", p)));
+        modified.sort();
+        modified.dedup();
+        
+        if !modified.is_empty() {
+            all_changes.push(("### Modified".to_string(), 2));
+            all_changes.extend(modified.into_iter().map(|page| (page, 3)));
         }
 
         // Deleted files
-        if !changed_pages[2].is_empty() {
-            page.contents.push(("### Deleted".to_string(), 2));
-            for deleted in &changed_pages[2] {
-                page.contents.push((format!("[[{}]]", deleted), 3));
-            }
+        let mut deleted = existing_changes.iter()
+            .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
+            .filter(|(line, _)| {
+                let section_start = existing_changes.iter()
+                    .position(|(l, i)| *i == 2 && l == "### Deleted");
+                let section_end = existing_changes.iter()
+                    .position(|(_, i)| *i == 1)
+                    .unwrap_or(existing_changes.len());
+                section_start.map_or(false, |start| 
+                    existing_changes[start..section_end].iter().any(|(l, _)| l == line)
+                )
+            })
+            .map(|(line, _)| line.clone())
+            .collect::<Vec<_>>();
+            
+        deleted.extend(changed_pages[2].iter().map(|p| format!("[[{}]]", p)));
+        deleted.sort();
+        deleted.dedup();
+        
+        if !deleted.is_empty() {
+            all_changes.push(("### Deleted".to_string(), 2));
+            all_changes.extend(deleted.into_iter().map(|page| (page, 3)));
         }
+    }
+
+    // Add all accumulated changes to new entries
+    new_entries.extend(all_changes);
+
+    // Insert all new entries after the "Changed Pages" section
+    let insert_position = changed_pages_index + 1;
+    for (entry, indent) in new_entries.into_iter().rev() {
+        page.contents.insert(insert_position, (entry, indent));
     }
 
     // Write the updated page
