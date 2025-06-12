@@ -5,6 +5,7 @@
 mod file_manager;
 
 use anyhow::{bail, Context, Ok, Result};
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use dialoguer::Input;
 use std::fs::{self, OpenOptions};
@@ -135,15 +136,13 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
 
     // Create version page if it doesn't exist
     if !file_manager.logseq_page_exists(&version_page) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_secs();
+        let now = Utc::now().format("%Y-%m-%d").to_string();
 
         file_manager.write_logseq_page(&LogseqPage::new(
             &version_page,
             vec![
                 ("tags".into(), "Version".into()),
-                ("released-date".into(), now.to_string()),
+                ("released-date".into(), now),
             ],
             vec![
                 ("# Summary".into(), 0),
