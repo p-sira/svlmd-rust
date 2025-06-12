@@ -199,18 +199,18 @@ pub fn detect_root() -> Result<PathBuf> {
         anyhow::anyhow!("Failed to get executable directory")
     }
     // Get the directory containing the executable
-    let exe_dir = exe_path.parent().ok_or_else(|| fail())?;
+    let exe_dir = exe_path.parent().ok_or_else(fail)?;
 
     // Check if we're in debug/release mode (in target directory)
     if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
         // Go up three levels: debug/release -> target -> project_root
         return Ok(exe_dir
             .parent() // target
-            .ok_or_else(|| fail())?
+            .ok_or_else(fail)?
             .parent() // svlmd
-            .ok_or_else(|| fail())?
+            .ok_or_else(fail)?
             .parent() // root
-            .ok_or_else(|| fail())?
+            .ok_or_else(fail)?
             .to_path_buf());
     }
 

@@ -1,7 +1,6 @@
 mod file_manager;
 
 use anyhow::{bail, Context, Ok, Result};
-use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use dialoguer::Input;
 use std::fs::{self, OpenOptions};
@@ -59,11 +58,11 @@ fn init_config(root: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn init(root: &PathBuf) -> Result<(FileManager)> {
+fn init(root: &PathBuf) -> Result<FileManager> {
     // Initialize the tool if not already initialized
     if !root.join(".svlmd").exists() {
         println!("Config not found. Creating...");
-        init_config(&root)?;
+        init_config(root)?;
         println!();
     }
 
@@ -133,7 +132,7 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
     }
 
     let mut page = file_manager.read_logseq_page(&version_page)?;
-    let full_version_string = format!("## {}", version.to_string());
+    let full_version_string = format!("## {}", version);
     if !page
         .contents
         .iter()
@@ -177,7 +176,7 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
 
 fn sync_command(file_manager: &FileManager, version: bool, verbose: bool) -> Result<()> {
     if version {
-        sync_version(&file_manager, verbose)?;
+        sync_version(file_manager, verbose)?;
     }
     Ok(())
 }
