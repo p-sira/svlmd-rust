@@ -2,13 +2,102 @@
 #[error("Config not found")]
 pub struct ConfigNotFoundError;
 
-use anyhow::{Result};
+use anyhow::{Context, Result};
 use std::{
-    fs::File,
-    fs::OpenOptions,
-    io::{BufReader, Write},
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
 };
+use git2::{Repository, StatusOptions};
+
+pub struct LogseqPage {
+    pub title: String,
+    pub properties: Vec<(String, String)>,
+    pub contents: Vec<(String, u8)>, // Vec of content and indentation level
+}
+
+impl LogseqPage {
+    pub fn new(
+        title: &str,
+        properties: Vec<(String, String)>,
+        contents: Vec<(String, u8)>,
+    ) -> Self {
+        Self {
+            title: title.to_string(),
+            properties,
+            contents,
+        }
+    }
+
+    pub fn from_plain(
+        title: &str,
+        properties: Vec<(String, String)>,
+        contents: &str,
+    ) -> Self {
+        fn count_indentation(line: &str) -> u8 {
+            let spaces = line.chars().take_while(|c| *c == ' ').count() as u8;
+            spaces / 4
+        }
+        let contents = contents
+            .lines()
+            .map(|line| (line.trim().replacen("- ", "", 1).to_string(), count_indentation(line)))
+            .collect::<Vec<(String, u8)>>();
+        Self {
+            title: title.to_string(),
+            properties,
+            contents,
+        }
+    }
+
+    pub fn write_page(&self, pages_dir: &PathBuf) -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(self.title_to_path(pages_dir))?;
+
+        self.properties.iter().for_each(|(key, value)| {
+            writeln!(file, "{}:: {}", key, value).unwrap();
+        });
+        writeln!(file).unwrap();
+
+        self.contents.iter().for_each(|(content, indentation)| {
+            writeln!(file, "{}- {}", "    ".repeat(*indentation as usize), content).unwrap();
+        });
+
+        Ok(())
+    }
+
+    pub fn read_page(&self, pages_dir: &PathBuf) -> Result<Self> {
+        let file = File::open(self.title_to_path(pages_dir))?;
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
+        
+        let properties_end = lines.iter()
+            .position(|line| !line.contains("::"))
+            .unwrap_or(0);
+            
+        let properties = lines[..properties_end]
+            .iter()
+            .map(|line| {
+                let parts: Vec<&str> = line.split("::").collect();
+                (parts[0].to_string(), parts[1].trim().to_string())
+            })
+            .collect();
+            
+        let contents = lines[properties_end..].join("\n");
+
+        Ok(Self::from_plain(
+            &self.title,
+            properties,
+            &contents,
+        ))
+    }
+
+    fn title_to_path(&self, pages_dir: &PathBuf) -> PathBuf {
+        pages_dir.join(self.title.replace("/", "___") + ".md")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FileManager {
@@ -37,45 +126,65 @@ impl FileManager {
     }
 
     pub fn logseq_page_exists(&self, title: &str) -> bool {
-        let page_path = self.root.join("pages").join(title.replace("/", "___") + ".md");
+        let page_path = self
+            .root
+            .join("pages")
+            .join(title.replace("/", "___") + ".md");
         page_path.exists()
     }
 
-    pub fn write_logseq_page(
-        &self,
-        title: &str,
-        properties: Vec<(&str, &str)>,
-        contents: &str,
-    ) -> Result<()> {
-        write_logseq_page(self.root.clone(), title, properties, contents)
+    pub fn write_logseq_page(&self, page: &LogseqPage) -> Result<()> {
+        page.write_page(&self.root.join("pages"))
     }
-}
 
-/// Write or create a logseq page
-pub fn write_logseq_page(
-    root: PathBuf,
-    title: &str,
-    properties: Vec<(&str, &str)>,
-    contents: &str,
-) -> Result<()> {
-    let page_path = root
-        .join("pages")
-        .join(title.to_string().replace("/", "___") + ".md");
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(page_path)?;
-
-    for (key, value) in properties {
-        writeln!(file, "{}:: {}", key, value)?;
+    pub fn read_logseq_page(&self, title: &str) -> Result<LogseqPage> {
+        let page = LogseqPage::new(title, vec![], vec![]);
+        page.read_page(&self.root.join("pages"))
     }
-    writeln!(file)?;
+    
+    pub fn get_changed_pages(&self) -> Result<[Vec<String>; 3]> {
+        let repo = Repository::open(&self.root)
+            .context("Failed to open git repository")?;
+        let mut changed_pages = [Vec::new(), Vec::new(), Vec::new()];
+        
+        let mut status_opts = StatusOptions::new();
+        status_opts
+            .include_untracked(true)
+            .include_ignored(false)
+            .include_unmodified(false)
+            .show(git2::StatusShow::IndexAndWorkdir);
+            
+        let statuses = repo.statuses(Some(&mut status_opts))
+            .context("Failed to get git status")?;
+            
+        // Sort pages into new, modified, and deleted
+        let mut new_pages = Vec::new();
+        let mut modified_pages = Vec::new();
+        let mut deleted_pages = Vec::new();
 
-    writeln!(file, "{}", contents)?;
+        for entry in statuses.iter() {
+            let status = entry.status();
+            if let Some(path) = entry.path() {
+                if path.starts_with("pages/") && path.ends_with(".md") {
+                    if let Some(filename) = PathBuf::from(path).file_stem() {
+                        let page_name = filename.to_string_lossy().replace("___", "/");
+                        if status.is_wt_new() {
+                            new_pages.push(page_name);
+                        } else if status.is_wt_modified() || status.is_wt_renamed() {
+                            modified_pages.push(page_name); 
+                        } else if status.is_wt_deleted() {
+                            deleted_pages.push(page_name);
+                        }
+                    }
+                }
+            }
+        }
 
-    Ok(())
+        changed_pages[0].extend(new_pages);
+        changed_pages[1].extend(modified_pages);
+        changed_pages[2].extend(deleted_pages);
+        Ok(changed_pages)
+    }
 }
 
 /// Returns the path to the current executable
