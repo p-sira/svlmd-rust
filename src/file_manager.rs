@@ -1,3 +1,4 @@
+/// Error type for when SVLMD configuration is not found
 #[derive(Debug, thiserror::Error)]
 #[error("Config not found")]
 pub struct ConfigNotFoundError;
@@ -10,13 +11,23 @@ use std::{
 };
 use git2::{Repository, StatusOptions};
 
+/// Represents a Logseq page with its metadata and content
+/// 
+/// A Logseq page consists of:
+/// - A title
+/// - Properties (key-value pairs in the page header)
+/// - Contents (lines of text with indentation levels)
 pub struct LogseqPage {
+    /// The title of the page
     pub title: String,
+    /// Properties in the page header as key-value pairs
     pub properties: Vec<(String, String)>,
-    pub contents: Vec<(String, u8)>, // Vec of content and indentation level
+    /// Page contents with indentation levels
+    pub contents: Vec<(String, u8)>,
 }
 
 impl LogseqPage {
+    /// Create a new Logseq page with the given title, properties, and contents
     pub fn new(
         title: &str,
         properties: Vec<(String, String)>,
@@ -29,6 +40,12 @@ impl LogseqPage {
         }
     }
 
+    /// Create a Logseq page from plain text content
+    /// 
+    /// Converts plain text content into a structured page by:
+    /// - Parsing indentation levels
+    /// - Removing bullet points
+    /// - Preserving properties
     pub fn from_plain(
         title: &str,
         properties: Vec<(String, String)>,
@@ -49,6 +66,12 @@ impl LogseqPage {
         }
     }
 
+    /// Write the page to the filesystem
+    /// 
+    /// Formats and writes the page with:
+    /// - Properties in the header
+    /// - Properly indented content
+    /// - Bullet points for each line
     pub fn write_page(&self, pages_dir: &PathBuf) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -72,6 +95,11 @@ impl LogseqPage {
         Ok(())
     }
 
+    /// Read a page from the filesystem
+    /// 
+    /// Parses a Logseq page file into a structured format by:
+    /// - Extracting properties from the header
+    /// - Preserving content with indentation
     pub fn read_page(&self, pages_dir: &PathBuf) -> Result<Self> {
         let file = File::open(self.title_to_path(pages_dir))?;
         let reader = BufReader::new(file);
@@ -98,18 +126,32 @@ impl LogseqPage {
         ))
     }
 
+    /// Convert a page title to its filesystem path
+    /// 
+    /// Handles special characters in titles by:
+    /// - Replacing forward slashes with triple underscores
+    /// - Adding the .md extension
     fn title_to_path(&self, pages_dir: &PathBuf) -> PathBuf {
         pages_dir.join(self.title.replace("/", "___") + ".md")
     }
 }
 
+/// Manages file operations and Git integration for SVLMD
 #[derive(Debug, Clone)]
 pub struct FileManager {
+    /// Root directory of the SVLMD project
     pub root: PathBuf,
+    /// Name of the current contributor
     pub contributor_name: String,
 }
 
 impl FileManager {
+    /// Create a new FileManager instance
+    /// 
+    /// Initializes by:
+    /// - Finding the project root
+    /// - Reading configuration
+    /// - Loading contributor information
     pub fn new() -> Result<Self, ConfigNotFoundError> {
         let root = detect_root().map_err(|_| ConfigNotFoundError)?;
         let config_path = root.join(".svlmd");
@@ -129,6 +171,7 @@ impl FileManager {
         }
     }
 
+    /// Check if a Logseq page exists
     pub fn logseq_page_exists(&self, title: &str) -> bool {
         let page_path = self
             .root
@@ -137,15 +180,23 @@ impl FileManager {
         page_path.exists()
     }
 
+    /// Write a Logseq page to the filesystem
     pub fn write_logseq_page(&self, page: &LogseqPage) -> Result<()> {
         page.write_page(&self.root.join("pages"))
     }
 
+    /// Read a Logseq page from the filesystem
     pub fn read_logseq_page(&self, title: &str) -> Result<LogseqPage> {
         let page = LogseqPage::new(title, vec![], vec![]);
         page.read_page(&self.root.join("pages"))
     }
     
+    /// Get lists of changed pages from Git status
+    /// 
+    /// Returns an array of three vectors containing:
+    /// - [0]: New pages
+    /// - [1]: Modified pages
+    /// - [2]: Deleted pages
     pub fn get_changed_pages(&self) -> Result<[Vec<String>; 3]> {
         let repo = Repository::open(&self.root)
             .context("Failed to open git repository")?;
@@ -197,6 +248,9 @@ pub fn get_executable_path() -> Result<PathBuf> {
 }
 
 /// Detects the root directory of the project
+/// 
+/// Searches for the .svlmd configuration file to determine
+/// the root directory of the SVLMD project
 pub fn detect_root() -> Result<PathBuf> {
     let exe_path = get_executable_path()?;
     fn fail() -> anyhow::Error {

@@ -1,3 +1,7 @@
+/// SVLMD (Sira's Very Large Medical Database) CLI tool
+/// 
+/// This module implements the command-line interface for managing SVLMD,
+/// including initialization, synchronization, and version control features.
 mod file_manager;
 
 use anyhow::{bail, Context, Ok, Result};
@@ -9,6 +13,7 @@ use std::time::SystemTime;
 
 use crate::file_manager::{FileManager, LogseqPage};
 
+/// CLI configuration and command parsing structure
 #[derive(Parser)]
 #[command(name = "svlmd")]
 struct Cli {
@@ -16,6 +21,7 @@ struct Cli {
     command: Commands,
 }
 
+/// Available CLI commands
 #[derive(Subcommand, PartialEq)]
 enum Commands {
     /// Initialize SVLMD with contributor information
@@ -25,12 +31,16 @@ enum Commands {
         /// Sync the version metadata
         #[arg(long, short = 'V')]
         version: bool,
-        /// Verbose
+        /// Verbose output mode
         #[arg(long, short = 'v')]
         verbose: bool,
     },
 }
 
+/// Initialize SVLMD configuration
+/// 
+/// Creates or overwrites the .svlmd configuration file with contributor information.
+/// Prompts the user for their name and stores it in the configuration.
 fn init_config(root: &PathBuf) -> Result<()> {
     if root.join(".svlmd").exists() {
         println!(".svlmd already exists. Overwriting...");
@@ -58,6 +68,12 @@ fn init_config(root: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Initialize SVLMD system
+/// 
+/// Sets up the SVLMD environment by:
+/// 1. Creating configuration if it doesn't exist
+/// 2. Initializing the file manager
+/// 3. Creating contributor's Logseq page if it doesn't exist
 fn init(root: &PathBuf) -> Result<FileManager> {
     // Initialize the tool if not already initialized
     if !root.join(".svlmd").exists() {
@@ -83,6 +99,12 @@ fn init(root: &PathBuf) -> Result<FileManager> {
     Ok(file_manager)
 }
 
+/// Synchronize version information
+/// 
+/// Updates version tracking by:
+/// 1. Reading the current version from version.txt
+/// 2. Creating or updating the version page in Logseq
+/// 3. Tracking changed pages since the last version
 fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
     let version_path = file_manager.root.join("version.txt");
     if !version_path.exists() {
@@ -174,6 +196,9 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// Handle the sync command
+/// 
+/// Processes synchronization operations based on provided flags
 fn sync_command(file_manager: &FileManager, version: bool, verbose: bool) -> Result<()> {
     if version {
         sync_version(file_manager, verbose)?;
@@ -181,6 +206,7 @@ fn sync_command(file_manager: &FileManager, version: bool, verbose: bool) -> Res
     Ok(())
 }
 
+/// Main entry point for the SVLMD CLI tool
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let root = file_manager::detect_root()?;
