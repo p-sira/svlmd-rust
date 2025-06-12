@@ -1,5 +1,5 @@
 /// SVLMD (Sira's Very Large Medical Database) CLI tool
-/// 
+///
 /// This module implements the command-line interface for managing SVLMD,
 /// including initialization, synchronization, and version control features.
 mod file_manager;
@@ -38,7 +38,7 @@ enum Commands {
 }
 
 /// Initialize SVLMD configuration
-/// 
+///
 /// Creates or overwrites the .svlmd configuration file with contributor information.
 /// Prompts the user for their name and stores it in the configuration.
 fn init_config(root: &Path) -> Result<()> {
@@ -69,7 +69,7 @@ fn init_config(root: &Path) -> Result<()> {
 }
 
 /// Initialize SVLMD system
-/// 
+///
 /// Sets up the SVLMD environment by:
 /// 1. Creating configuration if it doesn't exist
 /// 2. Initializing the file manager
@@ -100,7 +100,7 @@ fn init(root: &Path) -> Result<FileManager> {
 }
 
 /// Synchronize version information
-/// 
+///
 /// Updates version tracking by:
 /// 1. Reading the current version from version.txt
 /// 2. Creating or updating the version page in Logseq
@@ -153,9 +153,10 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
 
     let mut page = file_manager.read_logseq_page(&version_page)?;
     let full_version_string = format!("## [[{}]]", version);
-    
+
     // Find the "Changed Pages" section
-    let changed_pages_index = page.contents
+    let changed_pages_index = page
+        .contents
         .iter()
         .position(|(line, _)| line == "# Changed Pages")
         .unwrap_or(0);
@@ -191,81 +192,98 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
 
     // Merge existing changes with new changes
     let mut all_changes = Vec::new();
-    
+
     // Process new changes
     if !changed_pages.iter().all(|v| v.is_empty()) {
         // Added files
-        let mut added = existing_changes.iter()
+        let mut added = existing_changes
+            .iter()
             .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
             .filter(|(line, _)| {
-                let section_start = existing_changes.iter()
+                let section_start = existing_changes
+                    .iter()
                     .position(|(l, i)| *i == 2 && l == "### Added");
-                let section_end = existing_changes.iter()
+                let section_end = existing_changes
+                    .iter()
                     .position(|(l, i)| *i == 2 && l == "### Modified")
-                    .or_else(|| existing_changes.iter().position(|(l, i)| *i == 2 && l == "### Deleted"));
-                section_start.and_then(|start| section_end.map(|end| (start, end)))
-                    .map_or(false, |(start, end)| 
+                    .or_else(|| {
+                        existing_changes
+                            .iter()
+                            .position(|(l, i)| *i == 2 && l == "### Deleted")
+                    });
+                section_start
+                    .and_then(|start| section_end.map(|end| (start, end)))
+                    .map_or(false, |(start, end)| {
                         existing_changes[start..end].iter().any(|(l, _)| l == line)
-                    )
+                    })
             })
             .map(|(line, _)| line.clone())
             .collect::<Vec<_>>();
-        
+
         added.extend(changed_pages[0].iter().map(|p| format!("[[{}]]", p)));
         added.sort();
         added.dedup();
-        
+
         if !added.is_empty() {
             all_changes.push(("### Added".to_string(), 2));
             all_changes.extend(added.into_iter().map(|page| (page, 3)));
         }
 
         // Modified files
-        let mut modified = existing_changes.iter()
+        let mut modified = existing_changes
+            .iter()
             .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
             .filter(|(line, _)| {
-                let section_start = existing_changes.iter()
+                let section_start = existing_changes
+                    .iter()
                     .position(|(l, i)| *i == 2 && l == "### Modified");
-                let section_end = existing_changes.iter()
+                let section_end = existing_changes
+                    .iter()
                     .position(|(l, i)| *i == 2 && l == "### Deleted")
                     .or_else(|| existing_changes.iter().position(|(_, i)| *i == 1));
-                section_start.and_then(|start| section_end.map(|end| (start, end)))
-                    .map_or(false, |(start, end)| 
+                section_start
+                    .and_then(|start| section_end.map(|end| (start, end)))
+                    .map_or(false, |(start, end)| {
                         existing_changes[start..end].iter().any(|(l, _)| l == line)
-                    )
+                    })
             })
             .map(|(line, _)| line.clone())
             .collect::<Vec<_>>();
-            
+
         modified.extend(changed_pages[1].iter().map(|p| format!("[[{}]]", p)));
         modified.sort();
         modified.dedup();
-        
+
         if !modified.is_empty() {
             all_changes.push(("### Modified".to_string(), 2));
             all_changes.extend(modified.into_iter().map(|page| (page, 3)));
         }
 
         // Deleted files
-        let mut deleted = existing_changes.iter()
+        let mut deleted = existing_changes
+            .iter()
             .filter(|(line, indent)| *indent == 3 && line.starts_with("[["))
             .filter(|(line, _)| {
-                let section_start = existing_changes.iter()
+                let section_start = existing_changes
+                    .iter()
                     .position(|(l, i)| *i == 2 && l == "### Deleted");
-                let section_end = existing_changes.iter()
+                let section_end = existing_changes
+                    .iter()
                     .position(|(_, i)| *i == 1)
                     .unwrap_or(existing_changes.len());
-                section_start.map_or(false, |start| 
-                    existing_changes[start..section_end].iter().any(|(l, _)| l == line)
-                )
+                section_start.map_or(false, |start| {
+                    existing_changes[start..section_end]
+                        .iter()
+                        .any(|(l, _)| l == line)
+                })
             })
             .map(|(line, _)| line.clone())
             .collect::<Vec<_>>();
-            
+
         deleted.extend(changed_pages[2].iter().map(|p| format!("[[{}]]", p)));
         deleted.sort();
         deleted.dedup();
-        
+
         if !deleted.is_empty() {
             all_changes.push(("### Deleted".to_string(), 2));
             all_changes.extend(deleted.into_iter().map(|page| (page, 3)));
@@ -284,11 +302,21 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
     // Write the updated page
     file_manager.write_logseq_page(&page)?;
 
+    // Modify the Version page
+    file_manager.write_logseq_page(&LogseqPage {
+        title: "Version".into(),
+        properties: vec![
+            ("icon".into(), "🏷️".into()),
+            ("exclude-from-graph-view".into(), "true".into()),
+        ],
+        contents: vec![],
+    })?;
+
     Ok(())
 }
 
 /// Handle the sync command
-/// 
+///
 /// Processes synchronization operations based on provided flags
 fn sync_command(file_manager: &FileManager, version: bool, verbose: bool) -> Result<()> {
     if version {
