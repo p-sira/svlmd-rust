@@ -319,6 +319,11 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
 ///
 /// Processes synchronization operations based on provided flags
 fn sync_command(file_manager: &FileManager, version: bool, verbose: bool) -> Result<()> {
+    let mut version = version;
+    if !version {
+        version = true;
+    }
+
     if version {
         sync_version(file_manager, verbose)?;
     }
