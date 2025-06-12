@@ -89,7 +89,7 @@ fn sync_version(file_manager: &FileManager, verbose: bool) -> Result<()> {
         bail!("version.txt not found");
     }
 
-    let version = semver::Version::parse(&fs::read_to_string(version_path)?)
+    let version = semver::Version::parse(&fs::read_to_string(version_path)?.lines().next().unwrap())
         .context("Failed to parse version")?;
 
     if verbose {
